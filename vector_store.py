@@ -234,97 +234,83 @@ def _looks_like_duty_sentence(text: str) -> bool:
 
 
 def _normalize_skill_phrase(raw: str) -> str | None:
-    """
-    Clean a raw skill string into a canonical form.
-    Returns None if it's noise/invalid.
-    """
     if not raw or not str(raw).strip():
         return None
-    p = str(raw).strip()
 
-    # Strip leading bullets/symbols
+    p = str(raw).strip().lower()
+
+    # strip common leading JD phrases so they normalize to the real skill
+    p = _STRIP_LEAD_IN.sub("", p)
+
+    # cleanup
     p = re.sub(r"^[-–—•·▪▸◦*+\s]+", "", p)
-    # Remove parenthetical explanations
     p = re.sub(r"\([^)]{0,120}\)", "", p)
-    # Normalize chars
     p = re.sub(r"[^a-zA-Z0-9\s/+.#\-]", " ", p)
-    p = re.sub(r"[/]", " ", p)
-    p = re.sub(r"\s+", " ", p).strip().lower()
+    p = re.sub(r"\s+", " ", p).strip()
     p = p.rstrip(".,;:")
 
-    # Strip common lead-ins iteratively
-    while True:
-        nxt = _STRIP_LEAD_IN.sub("", p).strip()
-        if nxt == p:
-            break
-        p = nxt
-
-    if not p or len(p) < 2:
+    if not p:
         return None
 
     words = p.split()
-    if len(words) > 24:
-        return None
-    if len(words) == 1 and p in _SOLO_NOISE:
-        return None
-    if _GARBAGE_SUBSTR.search(p):
-        return None
-    if _RESPONSIBILITY_RE.search(p):
-        return None
-    if re.search(r"minimum\s+\d+\s+year|years?\s+of\s+experience\s+is\s+required", p):
-        return None
-    if re.search(r"full\s+time\s+education|^\d+\s+years?\s+full", p):
+
+    # 🔴 1. REMOVE LONG SENTENCES
+    if len(words) > 4:
         return None
 
-    # ── EXTRA REJECTIONS ──────────────────────────────────────────────────────
-
-    # Salary / number-heavy fragments: "7000", "7,000.00", "pay 7000"
-    digit_chars = sum(c.isdigit() for c in p)
-    if digit_chars > 0 and digit_chars / max(len(p), 1) > 0.30:
-        return None
-    if re.search(r"\d[\d,]+\.?\d*\s*(?:/-|rs\.?|inr|usd|eur|per|month|annum)?", p):
-        return None
-
-    # Single plain English action words / adjectives that are not tech names
-    _plain_action_singles = {
-        "study", "learn", "efficient", "identify", "location", "pay", "month",
-        "sessions", "workshops", "responsibilities", "soft", "clean", "good",
-        "strong", "ability", "knowledge", "exposure", "understanding",
-        "work", "write", "fix", "debug", "test", "code", "handle",
+    # 🔴 2. REMOVE VERB PHRASES
+    VERBS = {
+        "develop","build","work","collaborate",
+        "participate","experience","working",
+        "learn","identify","support","manage",
+        "contribute","assist","help","create",
+        "maintain","implement","should","must","ability"
     }
-    if len(words) == 1 and p in _plain_action_singles:
+    if any(w in VERBS for w in words):
         return None
 
-    # Plain-verb-start phrases that are job duties not skills
-    _verb_start_re = re.compile(
-        r"^(write|fix|learn|work\s+on|willingness|eager|quick|study|"
-        r"handle|debug|test\s+and|help\s+with|support\s+the|troubleshoot"
-        r"|identify\s+and|solve\s+technical|adhere\s+to|follow\s+best"
-        r"|maintain\s+clean|write\s+clean|produce\s+clean|deliver\s+clean"
-        r"|ensure\s+code|well.documented|document\s+code)",
+    # quick reject: noisy directive phrases
+    if re.match(
+        r"^(comfort\s+operating\s+in\s+flexible|should\s+know\s+|must\s+know\s+|"
+        r"should\s+be\s+able|must\s+be\s+able|ability\s+to\s+work|"
+        r"professional\s+experience\s+in|experience\s+working\s+with)",
+        p,
         re.I,
-    )
-    if _verb_start_re.search(p):
+    ):
         return None
 
-    # Generic JD meta-phrases (catch remaining)
-    _meta_phrase_re = re.compile(
-        r"(technical\s+issues|coding\s+best\s+practices|best\s+coding\s+practices"
-        r"|back.end\s+modules|problem.solving\s+abilit|clean\s+code"
-        r"|well.documented\s+code|code\s+quality|coding\s+standards"
-        r"|willingness\s+to\s+learn|eagerness\s+to\s+learn|quick\s+learner"
-        r"|fast\s+learner|self.motivated|team\s+player|attention\s+to\s+detail"
-        r"|communication\s+skills|interpersonal\s+skills|analytical\s+skills"
-        r"|time\s+management|result.oriented|detail.oriented"
-        # Remaining leakers from log
-        r"|skills\s+required|required\s+skills"
-        r"|the\s+role\s+focuses|gaining\s+hands.on|hands.on\s+experience\s+in"
-        r"|workshops\s+on|programming\s+frameworks"
-        r"|mobile\s+application\s+development|web\s+(?:and\s+)?mobile"
-        r"|software\s+development\s+lifecycle|development\s+lifecycle)",
-        re.I,
-    )
-    if _meta_phrase_re.search(p):
+    # 🔴 3. REMOVE JD STRUCTURE WORDS
+    BLOCK = {
+        "job","role","type","position","location",
+        "remote","apply","submit","form",
+        "responsibilities","requirements"
+    }
+    if any(w in BLOCK for w in words):
+        return None
+
+    # 🔴 4. REMOVE GENERIC NON-SKILLS
+    GENERIC = {
+        "best practices",
+        "clean code",
+        "problem solving",
+        "team player",
+        "time management",
+        "we need someone",
+        "we are looking for",
+        "looking for someone",
+        "seeking someone",
+        "seeking a",
+        "must be able",
+        "should be able",
+        "project based engagements",
+    }
+    if p in GENERIC:
+        return None
+
+    # 🔴 5. REMOVE WEAK SINGLE WORDS
+    if len(words) == 1 and len(p) < 3:
+        return None
+    if len(words) == 1 and not _is_tech_token(words[0]):
         return None
 
     return p
@@ -339,7 +325,7 @@ def _resolve_alias(phrase: str) -> str:
     p = phrase.strip().lower()
 
     # REST API variants: "rest api", "rest apis", "restful api", "restful apis"
-    if re.match(r"^restful?\s+apis?$", p):
+    if re.match(r"^rest(?:ful)?\s+apis?$", p):
         return "rest api"
 
     # Node.js variants: "node js", "node.js", "nodejs"
@@ -441,6 +427,15 @@ def _is_tech_token(word: str) -> bool:
         "airflow", "dbt", "tableau", "powerbi", "excel", "spring", "django",
         "flask", "fastapi", "express", "rails", "laravel", "net", ".net",
         "orm", "mvc", "oop", "oops", "regex", "xml", "yaml", "toml",
+        # Extended: common tech that may appear in modern JDs
+        "terraform", "ansible", "jenkins", "gitlab", "github", "bitbucket",
+        "nginx", "apache", "rabbitmq", "elasticsearch", "opensearch",
+        "celery", "pytest", "jest", "mocha", "cypress", "selenium",
+        "langchain", "openai", "huggingface", "llm", "rag", "mlops",
+        "superset", "grafana", "prometheus", "datadog", "splunk",
+        "snowflake", "redshift", "bigquery", "databricks", "hadoop",
+        "hive", "pig", "flink", "beam", "pubsub", "sqs", "sns",
+        "s3", "ec2", "ecs", "eks", "lambda", "cloudwatch",
     }
     if w in _known_tech:
         return True
@@ -448,7 +443,15 @@ def _is_tech_token(word: str) -> bool:
     if re.search(r"[0-9.#+]", w):
         return True
     # Short words that look like acronyms (2-4 uppercase-origin chars)
+    # Only allow short tokens IF they are in known tech
     if len(w) <= 4 and w.isalpha():
+        return w in _known_tech
+    # ── Dynamic heuristic: words that are NOT in a common English dictionary
+    # signal — camelCase or PascalCase shape (e.g. "GraphQL", "TypeScript")
+    if re.match(r"^[A-Z][a-z]+[A-Z]", word):   # CamelCase original
+        return True
+    # Ends in common tech suffixes even if not in known_tech list
+    if re.search(r"(js|db|sql|ml|ai|api|sdk|cli|ql|os|mq|cd|ops)$", w):
         return True
     return False
 
@@ -476,6 +479,28 @@ def _atomize_phrase(phrase: str) -> list[str]:
     phrase = _strip_leading_connectors(phrase.strip())
     if not phrase:
         return []
+
+    # Handle parenthetical lists like "Relational databases (PostgreSQL, MySQL)"
+    if "(" in phrase and ")" in phrase:
+        opening = phrase.find("(")
+        closing = phrase.find(")", opening)
+        if closing > opening:
+            base = phrase[:opening].strip()
+            inner = phrase[opening + 1 : closing].strip()
+            parts = []
+            if base:
+                parts.append(base)
+            parts.extend(
+                p.strip()
+                for p in re.split(r"\s*[,;/]\s*|\s+(?:and|or)\s+", inner)
+                if p.strip()
+            )
+            if parts:
+                results = []
+                for part in parts:
+                    results.extend(_atomize_phrase(part))
+                if results:
+                    return results
 
     words = phrase.split()
 
@@ -517,6 +542,71 @@ def _atomize_phrase(phrase: str) -> list[str]:
                         results.append(n)
                 if results:
                     return results
+        # ── B1. For 2-word phrases, require at least one tech token or known tech pattern
+        # This blocks "best practices", "clean code", "problem solving" etc.
+        if len(words) == 2:
+            _generic_pairs = re.compile(
+                r"^(best practices|clean code|problem solving|soft skills|"
+                r"good communication|team player|attention detail|time management|"
+                r"critical thinking|strong communication|effective communication|"
+                r"analytical skills|interpersonal skills|verbal written|"
+                r"written verbal|communication skills|leadership skills)$",
+                re.I,
+            )
+            normed_check = _normalize_skill_phrase(phrase)
+            if normed_check and _generic_pairs.match(normed_check):
+                return []
+            # If neither word is a tech token AND both words are plain English, drop it
+            if not any(_is_tech_token(w) for w in words):
+                _plain_english_re = re.compile(
+                    r"^[a-z]+$"  # no digits, dots, #, +
+                )
+                all_plain = all(
+                    _plain_english_re.match(w.lower()) and len(w) > 3
+                    for w in words
+                )
+                if all_plain:
+                    # Allow it only if it looks like a compound tech concept
+                    _compound_tech = re.compile(
+                        r"(database|machine learning|deep learning|data science|"
+                        r"natural language|computer vision|neural network|"
+                        r"version control|object oriented|agile methodology|"
+                        r"test driven|behavior driven|cloud computing|"
+                        r"microservices architecture|data structures|"
+                        r"design patterns|system design|"
+                        # Data engineering domain — these ARE real skills
+                        r"data modeling|data integration|data pipeline|"
+                        r"data warehouse|data lake|data quality|data governance|"
+                        r"data engineering|data architecture|data platform|"
+                        r"stream processing|batch processing|real.?time processing|"
+                        r"etl pipeline|elt pipeline|event driven|"
+                        # Software architecture domain
+                        r"distributed systems|fault tolerance|load balancing|"
+                        r"api design|api gateway|service mesh|message queue|"
+                        r"event sourcing|cqrs|domain driven|"
+                        r"frontend development|backend development|web development|mobile development|software development)",
+                        re.I,
+                    )
+                    if not _compound_tech.search(phrase):
+                        return []
+        # ── B2. Narrow job-title announcement filter ──────────────────────────
+        # Only filter phrases that are explicitly announcing a role being hired for,
+        # NOT skill requirements. "data engineer" as a skill context is valid;
+        # "hiring data engineer" or "role: data engineer" is not.
+        # We catch this at the line level in _SKIP_FULL_LINE already, but
+        # the rare case that slips through looks like a bare seniority+role phrase.
+        _job_announcement_re = re.compile(
+            r"^(senior|junior|lead|principal|staff|associate|entry.?level)\s+"
+            r"(software engineer|data engineer|backend engineer|frontend engineer|"
+            r"fullstack engineer|ml engineer|devops engineer|"
+            r"software developer|web developer|mobile developer|"
+            r"data analyst|business analyst|product manager|"
+            r"engineering manager|tech lead)$",
+            re.I,
+        )
+        normed_b2 = _normalize_skill_phrase(phrase)
+        if normed_b2 and _job_announcement_re.match(normed_b2):
+            return []
         # Not a simple and/or tech pair → keep whole phrase
         n = _normalize_skill_phrase(phrase)
         return [n] if n else []
@@ -555,6 +645,21 @@ def _atomize_phrase(phrase: str) -> list[str]:
         n_root = _normalize_skill_phrase(root_phrase)
         if n_root and n_root not in _SOLO_NOISE:
             results.append(n_root)
+
+        shared_tool_match = re.match(
+            r"^(?P<left>.+?)\s+(?:and|or)\s+(?P<right>.+?)\s+(?P<noun>databases?|development|services?|applications?|systems?)\.?$",
+            tool_part,
+            re.I,
+        )
+        if shared_tool_match:
+            left = shared_tool_match.group("left").strip().split()[-1]
+            right = shared_tool_match.group("right").strip().split()[-1]
+            noun = shared_tool_match.group("noun").strip()
+            for part in [f"{left} {noun}", f"{right} {noun}"]:
+                results.extend(_atomize_phrase(part))
+            if results:
+                return results
+
         for tool in re.split(r"\s*(?:and|or|,)\s*", tool_part, flags=re.I):
             t = _strip_leading_connectors(tool)
             if not t or len(t.split()) > 4:
@@ -565,6 +670,22 @@ def _atomize_phrase(phrase: str) -> list[str]:
                 t_normed = _resolve_alias(t_normed)
             if t_normed and t_normed not in _SOLO_NOISE:
                 results.append(t_normed)
+        if results:
+            return results
+
+    # ── E1. Shared-tail conjunctions like "relational and NoSQL databases"
+    shared_noun_match = re.match(
+        r"^(?P<left>.+?)\s+(?:and|or)\s+(?P<right>.+?)\s+(?P<noun>databases?|development|services?|applications?|systems?)\.?$",
+        phrase,
+        re.I,
+    )
+    if shared_noun_match:
+        left = shared_noun_match.group("left").strip().split()[-1]
+        right = shared_noun_match.group("right").strip().split()[-1]
+        noun = shared_noun_match.group("noun").strip()
+        results = []
+        for part in [f"{left} {noun}", f"{right} {noun}"]:
+            results.extend(_atomize_phrase(part))
         if results:
             return results
 
@@ -604,7 +725,60 @@ def _preprocess_jd_blob(text: str) -> str:
         (r"\s+(Additional\s+Information\s*:)", r"\n\1"),
     ):
         t = re.sub(pat, repl, t, flags=re.I)
-    return t
+
+    # ── Fix Issue 3: LinkedIn-style "Skills: React Angular Vue Node.js Django" ──
+    # These are space-separated inline skill lists with no commas/bullets.
+    # Detect: line has a skill-section label + colon + 3+ space-separated tokens
+    # that are all short (≤25 chars each) with no sentence-level punctuation.
+    def _expand_inline_skill_line(line: str) -> str:
+        m = re.match(
+            r"^(skills?|technical skills?|required skills?|tech stack|"
+            r"technologies|tools?)\s*:\s*(.+)$",
+            line.strip(),
+            re.I,
+        )
+        if not m:
+            return line
+        skill_list = m.group(2).strip()
+        # Only treat as inline list if: no commas/semicolons already handled,
+        # no sentence-ending punctuation, and ≥2 space-separated tokens
+        if re.search(r"[,;|]", skill_list):
+            return line  # already splittable by existing logic
+        if re.search(r"[!?](?:\s|$)|\.(?:\s|$)", skill_list):
+            return line  # sentence, not a list
+        tokens = skill_list.split()
+        if len(tokens) < 2:
+            return line
+
+        def _group_alias_tokens(tokens: list[str]) -> list[str]:
+            grouped = []
+            i = 0
+            while i < len(tokens):
+                token = tokens[i]
+                if i + 1 < len(tokens):
+                    pair = f"{token} {tokens[i+1]}"
+                    if re.match(
+                        r"^rest(?:ful)?\s+apis?$|^rest\s+api$|"
+                        r"node\s+js|react\s+js|next\s+js|vue\s+js|"
+                        r"c\s*sharp|postgre\s+sql|dot\s*net|"
+                        r"machine\s+learning|deep\s+learning$",
+                        pair,
+                        re.I,
+                    ):
+                        grouped.append(pair)
+                        i += 2
+                        continue
+                grouped.append(token)
+                i += 1
+            return grouped
+
+        grouped = _group_alias_tokens(tokens)
+        return f"Skills: {', '.join(grouped)}"
+
+    lines_out = []
+    for line in t.split("\n"):
+        lines_out.append(_expand_inline_skill_line(line))
+    return "\n".join(lines_out)
 
 
 def _dash_bullet_pieces(val: str) -> list[str]:
@@ -718,9 +892,45 @@ def parse_jd_requirements_from_text(jd_text: str) -> list[str]:
                         collect(piece)
                 continue
 
-        # Plain line (no bullet, no colon) — only take if short enough to be a skill
+        # Plain line (no bullet, no colon) — only take if it looks like a skill phrase.
         if len(line) <= 120 and not _SKIP_FULL_LINE.search(line):
-            collect(line)
+            line_lc = line.lower().strip()
+
+            # ── Hard block: JD structure / meta phrases ──
+            _PLAIN_LINE_BLOCKLIST = {
+                "about the job", "about the role", "about the company",
+                "about this role", "about us", "about the position",
+                "position", "location", "type", "role", "responsibilities",
+                "requirements", "qualifications", "interview", "apply",
+                "submit", "submit form", "how to apply", "application process",
+                "interview process", "job description", "job overview",
+                "the role", "the position", "full stack engineer",
+                "full-stack engineer", "software engineer", "what you'll do",
+                "what we offer", "who we are", "the team", "our team",
+                "what you will do", "nice to have", "good to have",
+                "must have", "preferred", "required", "key skills",
+            }
+
+            if line_lc in _PLAIN_LINE_BLOCKLIST:
+                continue
+
+            if any(line_lc.startswith(prefix) for prefix in (
+                "about the", "position ", "location ", "type ", "role ",
+                "the role", "what you", "who we", "our team", "note:",
+                "please ", "to apply", "submit your", "interview ", "apply ",
+            )):
+                continue
+
+            if re.match(
+                r"^(?:senior|junior|lead|principal|staff|associate|entry[- ]?level|"
+                r"software|data|backend|frontend|full[- ]stack|devops|engineering|"
+                r"product|business|technical)\b.*\b(?:engineer|developer|analyst|manager|specialist|architect)\b",
+                line_lc,
+            ):
+                continue
+
+            if _atomize_phrase(line):
+                collect(line)
 
     # ── Pass 2: Atomize every collected phrase ────────────────────────────────
     final_skills: list[str] = []
