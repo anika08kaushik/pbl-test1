@@ -195,7 +195,7 @@ _DUTY_SENTENCE_RE = re.compile(
 
 # Tech separators within a phrase — split on these to get atomic skills
 _TECH_SPLIT_RE = re.compile(
-    r"\s+(?:and|or|,|/|;|\|)\s+|\s*,\s*|\s*/\s*|\s*\|\s*|\s*;\s*",
+    r"\s+(?:and|or|,|/|\+|;|\|)\s+|\s*,\s*|\s*/\s*|\s*\|\s*|\s*;\s*|\s*\+\s*",
     re.I,
 )
 
@@ -247,9 +247,22 @@ def _normalize_skill_phrase(raw: str) -> str | None:
     p = re.sub(r"\([^)]{0,120}\)", "", p)
     p = re.sub(r"[^a-zA-Z0-9\s/+.#\-]", " ", p)
     p = re.sub(r"\s+", " ", p).strip()
+
+    # remove trailing noise suffixes like "basics", "knowledge", "understanding"
+    p = re.sub(r"\s+(?:basics|knowledge|understanding|fundamentals|skills?)$", "", p, flags=re.I)
     p = p.rstrip(".,;:")
 
     if not p:
+        return None
+
+    # drop non-skill action phrases that are not atomic tech names
+    ACTION_PREFIXES = (
+        "build ", "develop ", "fix ", "integrate ", "work ", "assist ",
+        "maintain ", "debug ", "support ", "learn ", "create ",
+        "participate ", "collaborate ", "implement ", "manage ",
+        "identify ", "write ", "study ", "help ", "contribute "
+    )
+    if any(p.startswith(prefix) for prefix in ACTION_PREFIXES):
         return None
 
     words = p.split()
@@ -387,6 +400,20 @@ def _resolve_alias(phrase: str) -> str:
     # Version control / Git variants
     if re.match(r"^git\s+version\s+control$|^version\s+control\s+(?:with\s+)?git$", p):
         return "git"
+
+    # Common generic skill normalizations
+    if p in {"database", "databases", "database management", "database basics"}:
+        return "database management"
+    if p in {"api", "apis", "application programming interface", "application programming interfaces"}:
+        return "rest api"
+    if p == "js":
+        return "javascript"
+    if p == "node":
+        return "node.js"
+    if p == "html/css":
+        return "html"
+    if p == "css/html":
+        return "css"
 
     # No alias match — return as-is
     return phrase.strip()
@@ -611,9 +638,9 @@ def _atomize_phrase(phrase: str) -> list[str]:
         n = _normalize_skill_phrase(phrase)
         return [n] if n else []
 
-    # ── C. Comma / pipe / semicolon separated list ───────────────────────────
-    if re.search(r"[,;|]", phrase):
-        parts = re.split(r"\s*[,;|]\s*", phrase)
+    # ── C. Comma / pipe / semicolon / plus separated list ────────────────────
+    if re.search(r"[,;|+]", phrase):
+        parts = re.split(r"\s*[,;|+]\s*", phrase)
         results = []
         for part in parts:
             part = _strip_leading_connectors(part)

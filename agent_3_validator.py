@@ -226,6 +226,14 @@ def run(jd_text=None, verbose=True) -> ATSResult:
             # prediction or resume-wide concept matching.
             global_boost = _keyword_boost(req, all_resume_text)
             final_score = max(best_score, global_boost)
+            # Step 2: HUMAN-LIKE BOOST
+            # If mapping helped with a transferable skill, boost it slightly.
+            if global_boost > 0:
+                final_score += 0.10
+            # If semantic match exists but is weak, give a small understanding boost.
+            if 0.20 < best_score < 0.50:
+                final_score += 0.05
+            final_score = min(final_score, 1.0)
 
             if final_score >= MATCH_THRESHOLD:
                 if best_score >= MATCH_THRESHOLD:
@@ -259,7 +267,7 @@ def run(jd_text=None, verbose=True) -> ATSResult:
                         similarity_score=similarity_score
                     )
                 )
-                weighted_points += 0.75
+                weighted_points += 0.85
 
             else:
                 missing.append(
