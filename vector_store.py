@@ -2,9 +2,15 @@ import re
 import chromadb
 from sentence_transformers import SentenceTransformer
 import uuid
+from pathlib import Path
 
-# INIT
-client = chromadb.Client()
+# INIT — PersistentClient (not in-memory) so SQLite state is shared across
+# threads. Streamlit reruns the script on a fresh ScriptRunner thread, and
+# chromadb's in-memory `Client()` uses per-thread SQLite connections, which
+# means the new thread sees a DB with no tables → OperationalError.
+_CHROMA_PATH = Path(__file__).parent / ".chroma"
+_CHROMA_PATH.mkdir(exist_ok=True)
+client = chromadb.PersistentClient(path=str(_CHROMA_PATH))
 
 collection = client.get_or_create_collection("resume")
 jd_collection = client.get_or_create_collection("jd_requirements")

@@ -12,7 +12,7 @@ from models import ATSResult, EvaluationResult, InterviewQuestions
 from mcp_tools import call_tool
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "gemma3:4b"
+MODEL = "llava:7b"
 
 
 def _ollama_generate(prompt: str) -> str:
