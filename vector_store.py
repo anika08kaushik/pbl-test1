@@ -32,6 +32,7 @@ def _to_text(x):
 
 # ── STORE RESUME ──────────────────────────────────────────────────────────────
 def store_resume_chunks(chunks):
+    global collection
     if not chunks:
         return
 
@@ -62,17 +63,28 @@ def store_resume_chunks(chunks):
         return
 
     embeddings = model.encode(documents)
-    collection.add(
-        documents=documents,
-        embeddings=embeddings.tolist(),
-        metadatas=metadatas,
-        ids=ids,
-    )
+    try:
+        collection.add(
+            documents=documents,
+            embeddings=embeddings.tolist(),
+            metadatas=metadatas,
+            ids=ids,
+        )
+    except chromadb.errors.NotFoundError:
+        # collection was removed from the DB — recreate and retry
+        collection = client.get_or_create_collection("resume")
+        collection.add(
+            documents=documents,
+            embeddings=embeddings.tolist(),
+            metadatas=metadatas,
+            ids=ids,
+        )
     print(f"[vector_store] Stored {len(documents)} resume chunks with section metadata")
 
 
 # ── QUERY RESUME with optional section filter ─────────────────────────────────
 def query_resume_top_k(query, k=25, section_filter=None):
+    global collection
     if not query:
         return []
 
@@ -100,12 +112,24 @@ def query_resume_top_k(query, k=25, section_filter=None):
                 n_results=k,
                 include=["documents", "metadatas", "distances"],
             )
+    except chromadb.errors.NotFoundError:
+        # collection record was deleted from DB; recreate and retry once
+        collection = client.get_or_create_collection("resume")
+        if where:
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=k,
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
+        else:
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=k,
+                include=["documents", "metadatas", "distances"],
+            )
     except Exception:
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=k,
-            include=["documents", "metadatas", "distances"],
-        )
+        return []
 
     docs = results.get("documents", [[]])
     metas = results.get("metadatas", [[]])
@@ -1019,6 +1043,7 @@ def get_jd_only_requirements(jd_text=None):
 
 # STORE JD REQUIREMENTS
 def store_jd_requirements_tagged(jd_items=None, resume_items=None, title=None):
+    global jd_collection
     if not jd_items:
         return
 
@@ -1029,11 +1054,20 @@ def store_jd_requirements_tagged(jd_items=None, resume_items=None, title=None):
         return
 
     embeddings = model.encode(processed)
-    jd_collection.add(
-        documents=processed,
-        embeddings=embeddings.tolist(),
-        ids=[str(uuid.uuid4()) for _ in processed],
-    )
+    try:
+        jd_collection.add(
+            documents=processed,
+            embeddings=embeddings.tolist(),
+            ids=[str(uuid.uuid4()) for _ in processed],
+        )
+    except chromadb.errors.NotFoundError:
+        # recreate collection and retry (jd_collection declared global at function top)
+        jd_collection = client.get_or_create_collection("jd_requirements")
+        jd_collection.add(
+            documents=processed,
+            embeddings=embeddings.tolist(),
+            ids=[str(uuid.uuid4()) for _ in processed],
+        )
     print(f"[vector_store] Stored {len(processed)} JD requirements")
 
 
@@ -1064,6 +1098,7 @@ def query_resume(query=None, k=25, query_text=None, n_results=None, section_filt
 
 
 def query_jd(query, k=10):
+    global jd_collection
     if not query:
         return []
     query_embedding = model.encode([str(query)])[0]
@@ -1077,6 +1112,20 @@ def query_jd(query, k=10):
         if not docs or not docs[0]:
             return []
         return [{"requirement": d} for d in docs[0]]
+    except chromadb.errors.NotFoundError:
+        jd_collection = client.get_or_create_collection("jd_requirements")
+        try:
+            results = jd_collection.query(
+                query_embeddings=[query_embedding],
+                n_results=k,
+                include=["documents"],
+            )
+            docs = results.get("documents", [[]])
+            if not docs or not docs[0]:
+                return []
+            return [{"requirement": d} for d in docs[0]]
+        except Exception:
+            return []
     except Exception:
         return []
 
