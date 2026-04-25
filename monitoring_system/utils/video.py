@@ -3,8 +3,8 @@ import PIL.Image
 import numpy as np
 
 class VideoStream:
-    def __init__(self, device_id=0, width=640, height=480):
-        self.cap = cv2.VideoCapture(device_id)
+    def __init__(self, video_path, width=640, height=480):
+        self.cap = cv2.VideoCapture(video_path)
         self.width = width
         self.height = height
 

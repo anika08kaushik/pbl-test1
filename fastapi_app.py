@@ -68,3 +68,21 @@ async def query_resume(query: str = Form(...), k: int = Form(5), section: str = 
     from vector_store import query_resume
     res = query_resume(query_text=query, n_results=k, section_filter=section)
     return {"results": res}
+
+
+from fastapi import UploadFile, File
+import tempfile
+
+@app.post("/monitor")
+async def monitor(video: UploadFile = File(...)):
+    from monitoring_system.core import process_video
+
+    # Save uploaded video temporarily
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        tmp.write(await video.read())
+        video_path = tmp.name
+
+    # Run monitoring
+    result = process_video(video_path)
+
+    return result
