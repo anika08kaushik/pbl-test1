@@ -87,6 +87,9 @@ class ConnectionManager:
             await self.active_connections[session_id].send_json(message)
 
 manager = ConnectionManager()
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 # --- AUTH ENDPOINTS ---
 
