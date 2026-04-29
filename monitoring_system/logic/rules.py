@@ -3,9 +3,14 @@ import time
 class BehaviorEngine:
     def __init__(self):
         self.reset()
+        self.behavior_observations = []
+        self.confidence_scores = []
+        self.posture_scores = []
+        self.fidgeting_detected_frames = 0
+        self.total_frames_analyzed = 0
 
-    def analyze(self, yolo_detections, face_data):
-        """Analyzes frame data to update session metrics and detect suspicious behavior."""
+    def analyze(self, yolo_detections, face_data, pose_data=None):
+        """Analyzes frame data to update session metrics, detect suspicious behavior, and track behavioral cues."""
         current_time = time.time()
         results = {
             "eye_contact_pct": 0,
@@ -13,7 +18,14 @@ class BehaviorEngine:
             "phone_detected": False,
             "multiple_people": False,
             "status": "Normal",
-            "alerts": []
+            "alerts": [],
+            "behavior": {
+                "confidence_level": "unknown",
+                "posture_score": 0,
+                "fidgeting_rate": 0,
+                "body_language_cues": [],
+                "leaning": "unknown"
+            }
         }
         
         # 1. Phone Detection
@@ -63,6 +75,31 @@ class BehaviorEngine:
             else:
                 self.gaze_away_start = None
 
+        # 5. Pose Analysis (Body Language & Confidence)
+        if pose_data:
+            self.total_frames_analyzed += 1
+            results["behavior"]["confidence_level"] = pose_data.get("confidence_level", "unknown")
+            results["behavior"]["posture_score"] = pose_data.get("posture_score", 0)
+            results["behavior"]["fidgeting_rate"] = pose_data.get("fidgeting_detected", False)
+            results["behavior"]["body_language_cues"] = pose_data.get("body_language_cues", [])
+            results["behavior"]["leaning"] = pose_data.get("leaning", "unknown")
+            
+            if pose_data.get("confidence_level"):
+                self.confidence_scores.append(pose_data["confidence_level"])
+            if pose_data.get("posture_score"):
+                self.posture_scores.append(pose_data["posture_score"])
+            if pose_data.get("fidgeting_detected"):
+                self.fidgeting_detected_frames += 1
+            
+            # Log behavior observations periodically
+            if self.total_frames_analyzed % 10 == 0:
+                observation = self._create_behavior_observation(pose_data)
+                if observation:
+                    self.behavior_observations.append({
+                        "timestamp": time.strftime("%H:%M:%S"),
+                        "observation": observation
+                    })
+
         # 5. Multiple People Rule
         if num_faces > 1:
             self._add_log("Multiple people detected", 50)
@@ -91,6 +128,66 @@ class BehaviorEngine:
     def get_logs(self):
         return self.logs
 
+    def _create_behavior_observation(self, pose_data):
+        """Create a concise behavior observation from pose data."""
+        observations = []
+        
+        confidence = pose_data.get("confidence_level", "unknown")
+        if confidence == "confident":
+            observations.append("appears confident and composed")
+        elif confidence == "nervous":
+            observations.append("showing signs of nervousness")
+        
+        posture = pose_data.get("posture_score", 0)
+        if posture > 80:
+            observations.append("excellent upright posture")
+        elif posture < 60:
+            observations.append("poor posture detected")
+        
+        if pose_data.get("fidgeting_detected"):
+            observations.append("fidgeting/notable movement")
+        
+        leaning = pose_data.get("leaning", "center")
+        if leaning == "forward":
+            observations.append("leaning forward - engaged")
+        elif leaning == "backward":
+            observations.append("leaning back - possibly disengaged")
+        
+        if observations:
+            return "; ".join(observations)
+        return None
+
+    def get_behavior_summary(self):
+        """Generate a summary of behavioral observations for the report."""
+        if not self.confidence_scores:
+            return {
+                "overall_confidence": "unknown",
+                "avg_posture_score": 0,
+                "fidgeting_rate": 0,
+                "behavior_observations": []
+            }
+        
+        confident_count = self.confidence_scores.count("confident")
+        nervous_count = self.confidence_scores.count("nervous")
+        total = len(self.confidence_scores)
+        
+        if confident_count / total > 0.5:
+            overall = "confident"
+        elif nervous_count / total > 0.4:
+            overall = "nervous"
+        else:
+            overall = "neutral"
+        
+        avg_posture = sum(self.posture_scores) / len(self.posture_scores) if self.posture_scores else 0
+        fidget_rate = (self.fidgeting_detected_frames / self.total_frames_analyzed * 100) if self.total_frames_analyzed > 0 else 0
+        
+        return {
+            "overall_confidence": overall,
+            "avg_posture_score": round(avg_posture, 1),
+            "fidgeting_rate": round(fidget_rate, 1),
+            "behavior_observations": self.behavior_observations[-10:] if self.behavior_observations else []
+        }
+
     def reset(self):
         self.suspicion_score = 0
         self.logs = []
@@ -98,3 +195,8 @@ class BehaviorEngine:
         self.absence_start = None
         self.looking_down_start = None
         self.gaze_away_start = None
+        self.behavior_observations = []
+        self.confidence_scores = []
+        self.posture_scores = []
+        self.fidgeting_detected_frames = 0
+        self.total_frames_analyzed = 0
