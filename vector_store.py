@@ -1,15 +1,24 @@
 import re
 import chromadb
-from sentence_transformers import SentenceTransformer
 import uuid
+from pathlib import Path
 
-# INIT
-client = chromadb.Client()
+from embedder import embed_texts, embed_single
+
+# Persistent Chroma DB storage for resume + JD embeddings
+PERSIST_DIR = Path(__file__).parent / ".chroma_db"
+PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+try:
+    client = chromadb.PersistentClient(path=str(PERSIST_DIR))
+except AttributeError:
+    client = chromadb.Client()
+except Exception as exc:
+    print(f"[vector_store] Warning: Persistent Chroma client failed, falling back to in-memory: {exc}")
+    client = chromadb.Client()
 
 collection = client.get_or_create_collection("resume")
 jd_collection = client.get_or_create_collection("jd_requirements")
-
-model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 # SAFE TEXT CONVERSION
@@ -55,10 +64,10 @@ def store_resume_chunks(chunks):
     if not documents:
         return
 
-    embeddings = model.encode(documents)
+    embeddings = embed_texts(documents)
     collection.add(
         documents=documents,
-        embeddings=embeddings.tolist(),
+        embeddings=embeddings,
         metadatas=metadatas,
         ids=ids,
     )
@@ -70,7 +79,7 @@ def query_resume_top_k(query, k=25, section_filter=None):
     if not query:
         return []
 
-    query_embedding = model.encode([str(query)])[0]
+    query_embedding = embed_single(str(query))
 
     where = None
     if section_filter:
@@ -1022,10 +1031,10 @@ def store_jd_requirements_tagged(jd_items=None, resume_items=None, title=None):
     if not processed:
         return
 
-    embeddings = model.encode(processed)
+    embeddings = embed_texts(processed)
     jd_collection.add(
         documents=processed,
-        embeddings=embeddings.tolist(),
+        embeddings=embeddings,
         ids=[str(uuid.uuid4()) for _ in processed],
     )
     print(f"[vector_store] Stored {len(processed)} JD requirements")
@@ -1060,7 +1069,7 @@ def query_resume(query=None, k=25, query_text=None, n_results=None, section_filt
 def query_jd(query, k=10):
     if not query:
         return []
-    query_embedding = model.encode([str(query)])[0]
+    query_embedding = embed_single(str(query))
     try:
         results = jd_collection.query(
             query_embeddings=[query_embedding],

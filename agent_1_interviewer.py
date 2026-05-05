@@ -12,7 +12,7 @@ from models import ATSResult, EvaluationResult, InterviewQuestions
 from mcp_tools import call_tool
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "gemma3:4b"
+MODEL = "gemma:7b"
 
 
 def _ollama_generate(prompt: str) -> str:
@@ -22,7 +22,7 @@ def _ollama_generate(prompt: str) -> str:
         "stream": False,
         "options": {
             "temperature": 0.3,
-            "num_predict": 512,  # 9 questions don't need more than this
+            "num_predict": 400,  # smaller budget for Gemma 7B to reduce timeout risk
         },
     }
     try:
@@ -94,7 +94,7 @@ def run(ats_result: ATSResult, eval_result: EvaluationResult) -> InterviewQuesti
 
     prompt = _build_prompt(ats_result, eval_result, skills_context, exp_context)
 
-    print("[agent_1] Generating interview questions via Gemma 4B...")
+    print("[agent_1] Generating interview questions via Gemma 7B...")
     raw = _ollama_generate(prompt)
 
     try:

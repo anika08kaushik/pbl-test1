@@ -26,10 +26,11 @@ import agent_3_validator
 import agent_2_evaluator
 import agent_1_interviewer
 from main import _extract_jd_requirements, _extract_resume_skill_items
-from extractor import extract_resume
+from extractor import extract_resume, extract_skills
 from vector_store import (
     store_resume_chunks,
     store_jd_requirements_tagged,
+    store_skills,
     clear_collections,
 )
 
@@ -115,6 +116,13 @@ if run_btn and uploaded_pdf and jd_text.strip():
                 resume_items=resume_items,
                 title=jd_title or "Target Role",
             )
+            
+            # Extract and store structured skills
+            # ── KEY FIX: reuse jd_items (already cleaned by Ollama pipeline)
+            # extract_skills(jd_text) is the regex path → produces garbage fragments
+            resume_skills = extract_skills(" ".join([c.content for c in chunks]))
+            store_skills(resume_skills, "resume")
+            store_skills(jd_items, "jd")   # jd_items = Ollama-extracted, validated, deduped
 
             ats_result  = agent_3_validator.run(jd_text)
             eval_result = agent_2_evaluator.run(ats_result)

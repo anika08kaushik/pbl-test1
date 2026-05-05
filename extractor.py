@@ -137,3 +137,235 @@ def chunk_resume(raw_text: str) -> List[ResumeChunk]:
 def extract_resume(pdf_path: str) -> List[ResumeChunk]:
     raw_text = extract_text_from_pdf(pdf_path)
     return chunk_resume(raw_text)
+
+
+# ── SKILL EXTRACTION & NORMALIZATION ──────────────────────────────────────────
+# ── CRITICAL: word-boundary safe normalization (FIXED) ──────────────────────
+# These ONLY replace multi-word phrases and explicit variants, never single letters
+NORMALIZATION_MAP = {
+    "react.js": "react",
+    "reactjs": "react",
+    "react js": "react",
+    "nodejs": "node.js",
+    "node js": "node.js",
+    "mongo db": "mongodb",
+    "expressjs": "express",
+    "express js": "express",
+    "pythonprogramming": "python",
+    "javaprogramming": "java",
+    "sqldatabase": "sql",
+    "nosqldatabase": "nosql",
+    "awscloud": "aws",
+    "azurecloud": "azure",
+    "googlecloud": "gcp",
+    "githubactions": "github actions",
+    "gitlabci": "gitlab ci",
+    "restful api": "rest api",
+    "rest apis": "rest api",
+    "api development": "rest api",
+    "api design": "rest api",
+    "typescriptlang": "typescript",
+    "postgres sql": "postgresql",
+    "postgre sql": "postgresql",
+    "aws service": "aws",
+}
+
+CRITICAL_SKILLS = [
+    "php", "flutter", ".net", "html", "css", "javascript",
+    "rest api", "git", "database", "python", "node.js",
+]
+
+COMMON_SKILLS = [
+    # Frontend
+    "react", "angular", "vue", "svelte", "next.js",
+    "html", "css", "javascript", "typescript",
+    # Backend
+    "node.js", "python", "java", "php", ".net", "go", "rust",
+    "django", "flask", "fastapi", "spring", "express", "laravel",
+    # Data & Visualization
+    "numpy", "pandas", "tensorflow", "pytorch", "scikit-learn", "scikit learn",
+    "matplotlib", "plotly", "seaborn", "bokeh",
+    "streamlit", "power bi", "tableau", "looker", "qlik",
+    "bi tools", "dashboarding", "visualization",
+    # ML & Data Science
+    "machine learning", "deep learning", "data science", "data analysis", "feature engineering",
+    "data cleaning", "eda", "exploratory data analysis", "model deployment",
+    # Databases
+    "sql", "postgresql", "mysql", "mongodb", "redis", "cassandra",
+    "elasticsearch", "firebase", "database", "nosql",
+    # Mobile
+    "flutter", "react native", "swift", "kotlin",
+    # DevOps & Infrastructure
+    "docker", "kubernetes", "terraform", "jenkins",
+    "aws", "azure", "gcp", "github actions", "gitlab ci", "ci/cd",
+    # Tools & Methodologies
+    "git", "github", "gitlab", "jira", "confluence",
+    "agile", "scrum", "rest api", "graphql",
+    # Soft Skills
+    "report writing", "communication", "documentation",
+    # Other
+    "linux", "windows", "macos", "unix",
+    "c++", "c#", "scala", "haskell",
+]
+
+DYNAMIC_SKILL_PATTERNS = [
+    (r"\b(?:next|nuxt|vue|svelte|react)\.js\b", None),
+    (r"\btypescript\b", None),
+    (r"\bgraphql\b", None),
+    (r"\bpostgres(?:ql)?\b", "postgresql"),
+    (r"\bredis\b", None),
+    (r"\bterraform\b", None),
+    (r"\belasticsearch\b", None),
+    (r"\bfirebase\b", None),
+    (r"\bc\+\+\b", "c++"),
+    (r"\bc#\b", "c#"),
+    (r"\brust\b", None),
+    (r"\bswift\b", None),
+    (r"\bkotlin\b", None),
+    (r"\b(api development|api design)\b", "rest api"),
+]
+
+
+def normalize_text(text: str) -> str:
+    """Normalize text for skill extraction."""
+    text = text.lower().strip()
+    for k, v in NORMALIZATION_MAP.items():
+        pattern = rf"(?<![a-z0-9]){re.escape(k)}(?![a-z0-9])"
+        text = re.sub(pattern, v, text)
+    text = re.sub(r"[^a-z0-9\s\.\-#\+\/\\]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def extract_dynamic_skills(text: str) -> List[str]:
+    normalized = normalize_text(text)
+    found = set()
+
+    for pattern, replacement in DYNAMIC_SKILL_PATTERNS:
+        matches = re.findall(pattern, normalized, re.I)
+        for match in matches:
+            if isinstance(match, tuple):
+                match = match[0]
+            match = match.lower().strip()
+            if replacement:
+                match = replacement
+            match = normalize_text(match)
+            if match:
+                found.add(match)
+
+    return sorted(found)
+
+
+def clean_resume_skill(skill: str) -> str | None:
+    """Clean resume skill by removing junk starters, long phrases, and non-technical terms."""
+    skill = skill.lower().strip()
+    # ❌ remove junk starters
+    if skill.startswith(("and", "such", "with")):
+        return None
+    # ❌ too long → sentence
+    if len(skill.split()) > 4:
+        return None
+    # ❌ no technical signal
+    if not any(c.isalpha() for c in skill):
+        return None
+    return skill
+
+
+def extract_skills(text: str) -> List[str]:
+    """
+    Extract structured skills from resume or JD text.
+    Multi-stage extraction for reliability and completeness.
+    
+    Stages:
+    1. Critical skills (must-haves)
+    2. Common skills (exact phrase matching with word boundaries)
+    3. Compound skill splitting (matplotlib/plotly, power bi or tableau)
+    4. Dynamic patterns (edge cases like .net, c++, etc.)
+    5. Requirements section focused extraction
+    
+    Returns sorted list of normalized skill names found in text.
+    """
+    if not text:
+        return []
+
+    text_lower = text.lower()
+    text_normalized = normalize_text(text)
+    found = set()
+
+    # STAGE 1: Critical skills (exact + flexible matching)
+    for skill in CRITICAL_SKILLS:
+        skill_lower = skill.lower()
+        if skill_lower in text_lower or skill_lower in text_normalized:
+            found.add(skill_lower)
+
+    # STAGE 2: Common skills (boundary-safe pattern matching)
+    for skill in COMMON_SKILLS:
+        skill_normalized = normalize_text(skill)
+        pattern = r"\b" + re.escape(skill_normalized) + r"\b"
+        if re.search(pattern, text_normalized):
+            found.add(skill_normalized)
+
+    # STAGE 3: Split compound skills (matplotlib/plotly, power bi or tableau)
+    # Extract comma and slash-separated lists
+    list_patterns = [
+        r"([\w\s\+\-\.#]+)[,/]\s*([\w\s\+\-\.#]+)",  # Handles: Python, Java or Flask/Express
+        r"([\w\s]+)\s+or\s+([\w\s]+)",  # Handles: Power BI or Tableau
+    ]
+    for pattern in list_patterns:
+        matches = re.findall(pattern, text_lower)
+        for match in matches:
+            if isinstance(match, tuple):
+                for item in match:
+                    skill = item.strip().lower()
+                    if 2 <= len(skill) <= 50:  # Reasonable skill length
+                        found.add(skill)
+            else:
+                skill = match.strip().lower()
+                if 2 <= len(skill) <= 50:
+                    found.add(skill)
+
+    # STAGE 4: Dynamic patterns (for edge cases like .net, c++, etc.)
+    for pattern, replacement in DYNAMIC_SKILL_PATTERNS:
+        matches = re.findall(pattern, text_lower, re.I)
+        for match in matches:
+            if isinstance(match, tuple):
+                match = match[0]
+            match = match.lower().strip()
+            if replacement:
+                match = replacement
+            if match and len(match) > 1:
+                found.add(match)
+
+    # STAGE 5: Extract from Requirements section for priority
+    # Capture the most important part of the JD
+    req_section = text_lower
+    req_match = re.search(r"(requirement|skill)[s]?:(.+?)(?=\n\w+:|$)", req_section, re.IGNORECASE | re.DOTALL)
+    if req_match:
+        req_text = req_match.group(2)
+        # Split by common delimiters: comma, semicolon, bullet points
+        for delimiter_pattern in [r"[,;·]", r"\n\s*[-*]"]:
+            chunks = re.split(delimiter_pattern, req_text)
+            for chunk in chunks:
+                chunk = chunk.strip().lower()
+                # Short phrases (1-4 words) are likely skills
+                words = chunk.split()
+                if 1 <= len(words) <= 4 and 2 <= len(chunk) <= 50:
+                    # Filter out common non-skills
+                    if chunk not in {'and', 'or', 'the', 'a', 'an', 'is', 'are', 'strong', 'good', 'excellent', 'basic'}:
+                        found.add(chunk)
+
+    # Normalize all found skills
+    found_normalized = set()
+    for skill in found:
+        normalized = normalize_text(skill)
+        if normalized and len(normalized) > 1:
+            found_normalized.add(normalized)
+
+    # Apply resume skill cleaning (FIX 2)
+    cleaned_skills = []
+    for skill in found_normalized:
+        cleaned = clean_resume_skill(skill)
+        if cleaned:
+            cleaned_skills.append(cleaned)
+
+    return sorted(cleaned_skills)
