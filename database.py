@@ -34,6 +34,12 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False)  # RECRUITER or INDIVIDUAL
+    full_name = Column(String, nullable=True)
+    bio = Column(Text, nullable=True)
+    location = Column(String, nullable=True)
+    avatar_url = Column(String, nullable=True)
+    skills = Column(JSON, default=list)
+    experience_years = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     jobs = relationship("JobDescription", back_populates="recruiter")
@@ -86,6 +92,8 @@ class Assessment(Base):
     dsa_feedback = Column(JSON, default=dict)
     integrity_score = Column(Float, default=100.0)
     overall_score = Column(Float, default=0.0)
+    behavior_summary = Column(JSON, default=dict)
+    interview_feedback = Column(JSON, default=dict)
     completed_at = Column(DateTime, default=datetime.utcnow)
 
     resume = relationship("Resume", back_populates="assessments")
@@ -253,7 +261,7 @@ def get_resumes_by_jd(jd_id: int) -> list:
         db.close()
 
 
-def create_assessment(resume_id: int, individual_id: int, mcq_score: float, dsa_code: str, dsa_feedback: dict, integrity_score: float) -> Assessment:
+def create_assessment(resume_id: int, individual_id: int, mcq_score: float, dsa_code: str, dsa_feedback: dict, integrity_score: float, behavior_summary: dict = None, interview_feedback: dict = None) -> Assessment:
     db = SessionLocal()
     try:
         overall = (mcq_score * 0.5) + (integrity_score * 0.5)
@@ -264,7 +272,9 @@ def create_assessment(resume_id: int, individual_id: int, mcq_score: float, dsa_
             dsa_code=dsa_code,
             dsa_feedback=dsa_feedback,
             integrity_score=integrity_score,
-            overall_score=overall
+            overall_score=overall,
+            behavior_summary=behavior_summary or {},
+            interview_feedback=interview_feedback or {}
         )
         db.add(assessment)
         db.commit()
@@ -319,3 +329,20 @@ def update_resume_analysis(resume_id: int, ats_score: float, matching_skills: li
             db.commit()
     finally:
         db.close()
+def update_user_profile(user_id, data):
+    db_session = SessionLocal()
+    try:
+        user = db_session.query(User).filter(User.id == user_id).first()
+        if user:
+            if 'full_name' in data: user.full_name = data['full_name']
+            if 'bio' in data: user.bio = data['bio']
+            if 'location' in data: user.location = data['location']
+            if 'avatar_url' in data: user.avatar_url = data['avatar_url']
+            if 'skills' in data: user.skills = data['skills']
+            if 'experience_years' in data: user.experience_years = data['experience_years']
+            db_session.commit()
+            db_session.refresh(user)
+            return user
+        return None
+    finally:
+        db_session.close()

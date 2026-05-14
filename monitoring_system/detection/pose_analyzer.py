@@ -4,12 +4,15 @@ from mediapipe.tasks.python import vision
 import cv2
 import numpy as np
 import time
+import os
+from .model_downloader import download_model_if_needed
 
 class PoseAnalyzer:
     def __init__(self):
         """Initialize MediaPipe Pose detector for body language analysis."""
         try:
-            base_options = python.BaseOptions(model_asset_path=None)
+            model_path = download_model_if_needed(model_type="pose")
+            base_options = python.BaseOptions(model_asset_path=model_path)
             options = vision.PoseLandmarkerOptions(
                 base_options=base_options,
                 output_segmentation_masks=False,

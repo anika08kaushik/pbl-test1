@@ -32,6 +32,7 @@ class EvaluationResult(BaseModel):
     qualitative_feedback: str
     strengths: List[str]
     gaps: List[str]
+    will_be_probed: List[str]
     overall_fit: str
 
 class InterviewQuestions(BaseModel):

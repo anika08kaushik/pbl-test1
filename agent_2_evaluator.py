@@ -1,6 +1,6 @@
 """
 Agent 2 — Qualitative Evaluator
-Uses Gemma 4B via Ollama for local, private, narrative evaluation.
+Uses Gemma 7B via Ollama for local, private, narrative evaluation.
 Takes the ATSResult + resume context and produces human-readable feedback.
 """
 
@@ -12,7 +12,7 @@ from models import ATSResult, EvaluationResult
 from mcp_tools import call_tool
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "gemma3:4b"
+MODEL = "gemma:7b"
 
 
 def _ollama_generate(prompt: str) -> str:
@@ -22,7 +22,7 @@ def _ollama_generate(prompt: str) -> str:
         "stream": False,
         "options": {
             "temperature": 0.3,
-            "num_predict": 512,  # evaluation output doesn't need more than this
+            "num_predict": 400,  # smaller budget for Gemma 7B to reduce timeout risk
         },
     }
     try:
@@ -57,6 +57,7 @@ Return ONLY valid JSON, no extra text, directly parseable by json.loads().
   "qualitative_feedback": "2-3 sentence assessment referencing specific skills",
   "strengths": ["strength 1", "strength 2", "strength 3"],
   "gaps": ["gap 1", "gap 2", "gap 3"],
+  "will_be_probed": ["specific question or area to probe 1", "area 2"],
   "overall_fit": "strong"
 }}
 
@@ -79,7 +80,7 @@ def run(ats_result: ATSResult) -> EvaluationResult:
 
     prompt = _build_prompt(ats_result, resume_context)
 
-    print("[agent_2] Calling Gemma 4B via Ollama...")
+    print("[agent_2] Calling Gemma 7B via Ollama...")
     raw_response = _ollama_generate(prompt)
 
     try:
@@ -99,6 +100,7 @@ def run(ats_result: ATSResult) -> EvaluationResult:
 
         strengths = data.get("strengths", []) or [m.requirement for m in ats_result.matching_skills[:3]]
         gaps = data.get("gaps", []) or [m.requirement for m in ats_result.missing_skills[:3]]
+        probes = data.get("will_be_probed", []) or [f"Probe expertise in {g}" for g in gaps[:2]]
 
         print(f"[agent_2] Done — fit: {fit}, strengths: {len(strengths)}, gaps: {len(gaps)}")
 
@@ -106,6 +108,7 @@ def run(ats_result: ATSResult) -> EvaluationResult:
             qualitative_feedback=data.get("qualitative_feedback", ""),
             strengths=strengths,
             gaps=gaps,
+            will_be_probed=probes,
             overall_fit=fit,
         )
 
@@ -114,11 +117,13 @@ def run(ats_result: ATSResult) -> EvaluationResult:
         fit = "strong" if ats_result.ats_score >= 65 else (
             "moderate" if ats_result.ats_score >= 35 else "weak"
         )
+        gaps = [m.requirement for m in ats_result.missing_skills[:3]]
         return EvaluationResult(
             qualitative_feedback=f"ATS score: {ats_result.ats_score}%. "
                                   f"Matched {len(ats_result.matching_skills)} requirements, "
                                   f"missing {len(ats_result.missing_skills)}.",
             strengths=[m.requirement for m in ats_result.matching_skills[:3]],
-            gaps=[m.requirement for m in ats_result.missing_skills[:3]],
+            gaps=gaps,
+            will_be_probed=[f"Verify knowledge of {g}" for g in gaps[:2]],
             overall_fit=fit,
         )

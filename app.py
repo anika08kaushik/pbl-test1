@@ -22,10 +22,11 @@ import agent_2_evaluator
 import agent_1_interviewer
 import agent_4_assessor
 from main import _extract_jd_requirements, _extract_resume_skill_items
-from extractor import extract_resume
+from extractor import extract_resume, extract_skills
 from vector_store import (
     store_resume_chunks,
     store_jd_requirements_tagged,
+    store_skills,
     clear_collections,
 )
 
@@ -73,10 +74,74 @@ if "voice_input" not in st.session_state:
 if "proctoring_logs" not in st.session_state:
     st.session_state.proctoring_logs = []
 
-def reset_all():
-    for k in list(st.session_state.keys()):
-        st.session_state.pop(k, None)
-    st.session_state.step = "screening"
+st.title("🎯 AI Resume Screener")
+
+uploaded_pdf = st.file_uploader("Upload resume (PDF)", type=["pdf"])
+jd_title     = st.text_input("Job title")
+jd_text      = st.text_area("Paste job description", height=200)
+
+run_btn = st.button("🚀 Run Screener", type="primary")
+
+
+# ── Pipeline — runs ONLY when button is clicked ───────────────────────────────
+# Results are stored in session_state so the display block below can render
+# them on subsequent reruns without re-running the expensive pipeline.
+
+if run_btn and uploaded_pdf and jd_text.strip():
+    # Clear stale results
+    for key in ["ats_result", "eval_result", "questions", "run_error", "run_traceback"]:
+        st.session_state.pop(key, None)
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(uploaded_pdf.read())
+            tmp_path = tmp.name
+
+        # Apply sidebar thresholds
+        agent_3_validator.MATCH_THRESHOLD   = match_threshold
+        agent_3_validator.PARTIAL_THRESHOLD = partial_threshold
+
+        with st.spinner("🔄 Running pipeline…"):
+            clear_collections()
+
+            chunks = extract_resume(tmp_path)
+            store_resume_chunks(chunks)
+
+            jd_items     = _extract_jd_requirements(jd_text)
+            resume_items = _extract_resume_skill_items(chunks)
+            store_jd_requirements_tagged(
+                jd_items=jd_items,
+                resume_items=resume_items,
+                title=jd_title or "Target Role",
+            )
+            
+            # Extract and store structured skills
+            # ── KEY FIX: reuse jd_items (already cleaned by Ollama pipeline)
+            # extract_skills(jd_text) is the regex path → produces garbage fragments
+            resume_skills = extract_skills(" ".join([c.content for c in chunks]))
+            store_skills(resume_skills, "resume")
+            store_skills(jd_items, "jd")   # jd_items = Ollama-extracted, validated, deduped
+
+            ats_result  = agent_3_validator.run(jd_text)
+            eval_result = agent_2_evaluator.run(ats_result)
+            questions   = agent_1_interviewer.run(ats_result, eval_result)
+
+        st.session_state["ats_result"]  = ats_result
+        st.session_state["eval_result"] = eval_result
+        st.session_state["questions"]   = questions
+
+    except Exception as e:
+        import traceback
+        st.session_state["run_error"]     = str(e)
+        st.session_state["run_traceback"] = traceback.format_exc()
+
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    # Rerun once to render results from session_state cleanly
+    # (prevents the display block from executing in the same pass as the pipeline)
     st.rerun()
 
 with st.sidebar:

@@ -30,6 +30,7 @@ from database import (
     init_db, create_user, authenticate_user, get_user_by_email,
     create_job, get_jobs, create_resume, get_resumes_by_jd, get_assessments_by_user,
     create_assessment, add_integrity_log, get_resume_by_id, update_resume_analysis, delete_job, get_or_create_google_user,
+    update_user_profile,
     User, JobDescription, Resume, Assessment, SessionLocal
 )
 from code_executor import execute_code
@@ -102,6 +103,14 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    avatar_url: Optional[str] = None
+    skills: Optional[List[str]] = None
+    experience_years: Optional[int] = None
+
 @app.post("/api/auth/register")
 async def register(req: RegisterRequest):
     try:
@@ -126,6 +135,20 @@ class GoogleAuthRequest(BaseModel):
 async def google_auth(req: GoogleAuthRequest):
     user = get_or_create_google_user(req.email)
     return {"id": user.id, "email": user.email, "role": user.role, "token": f"google-token-{user.id}"}
+
+@app.put("/api/user/profile")
+async def update_profile_endpoint(req: UserUpdate, user_id: int):
+    user = update_user_profile(user_id, req.dict(exclude_unset=True))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "success", "user": {
+        "full_name": user.full_name,
+        "bio": user.bio,
+        "location": user.location,
+        "avatar_url": user.avatar_url,
+        "skills": user.skills,
+        "experience_years": user.experience_years
+    }}
 
 
 # --- RECRUITER ENDPOINTS ---
@@ -217,18 +240,37 @@ async def upload_resumes(
 @app.get("/api/recruiter/candidates/{jd_id}")
 async def get_candidates(jd_id: int):
     resumes = get_resumes_by_jd(jd_id)
-    return [
-        {
+    output = []
+    for r in resumes:
+        # Get the latest assessment for this resume
+        db = SessionLocal()
+        assessment = db.query(Assessment).filter(Assessment.resume_id == r.id).order_by(Assessment.completed_at.desc()).first()
+        db.close()
+        
+        # Extract "Will Be Probed" from resume analysis_data if evaluation exists
+        will_be_probed = []
+        if r.analysis_data and "evaluation" in r.analysis_data:
+            will_be_probed = r.analysis_data["evaluation"].get("will_be_probed", [])
+
+        output.append({
             "id": r.id,
             "candidate_email": r.candidate_email,
             "file_name": r.file_name,
             "ats_score": r.ats_score,
             "matching_skills": r.matching_skills,
             "missing_skills": r.missing_skills,
-            "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None
-        }
-        for r in resumes
-    ]
+            "will_be_probed": will_be_probed,
+            "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
+            "assessment": {
+                "mcq_score": assessment.mcq_score,
+                "integrity_score": assessment.integrity_score,
+                "overall_score": assessment.overall_score,
+                "behavior_summary": assessment.behavior_summary,
+                "interview_feedback": assessment.interview_feedback,
+                "completed_at": assessment.completed_at.isoformat()
+            } if assessment else None
+        })
+    return output
 
 # --- INDIVIDUAL ENDPOINTS ---
 
@@ -246,6 +288,12 @@ async def get_profile(user_id: int):
         "user_id": user.id,
         "email": user.email,
         "role": user.role,
+        "full_name": user.full_name,
+        "bio": user.bio,
+        "location": user.location,
+        "avatar_url": user.avatar_url,
+        "skills": user.skills,
+        "experience_years": user.experience_years,
         "total_assessments": len(assessments),
         "average_score": sum(a.overall_score for a in assessments) / len(assessments) if assessments else 0
     }
@@ -381,7 +429,8 @@ async def proctor(req: ProctorRequest):
         "timestamp": time.time(),
         "confidence": stats["behavior"]["confidence_level"],
         "posture": stats["behavior"]["posture_score"],
-        "fidgeting": stats["behavior"]["fidgeting_rate"]
+        "fidgeting": stats["behavior"]["fidgeting_rate"],
+        "eye_contact": stats.get("eye_contact_pct", 0)
     })
     
     return {
@@ -453,13 +502,19 @@ async def submit_assessment(req: AssessmentSubmitRequest):
         session["mock_interview_feedback"] = mock_interview_feedback
         session["dsa_feedback"] = req.dsa_feedback
 
+    # Get behavior summary from rules engine (active session)
+    _, _, _, rules_obj = get_detectors()
+    behavior_summary = rules_obj.get_behavior_summary()
+
     assessment = create_assessment(
         resume_id=req.resume_id or 1,
         individual_id=req.user_id or 2,
         mcq_score=req.mcq_score,
         dsa_code=req.dsa_code,
         dsa_feedback=req.dsa_feedback,
-        integrity_score=req.integrity_score
+        integrity_score=req.integrity_score,
+        behavior_summary=behavior_summary,
+        interview_feedback=mock_interview_feedback
     )
     return {"id": assessment.id, "overall_score": assessment.overall_score}
 

@@ -5,10 +5,38 @@ Generates qualitative feedback based on candidate's answers to the interview que
 
 import json
 import requests
+import re
 from typing import List
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "llava:7b"
+
+def _analyze_filler_words(answers: List[dict]) -> dict:
+    fillers = ["um", "ah", "uh", "like", "you know", "actually", "basically"]
+    count = 0
+    total_words = 0
+    detected = {}
+    
+    for item in answers:
+        text = item.get("answer", "").lower()
+        words = text.split()
+        total_words += len(words)
+        for f in fillers:
+            # Use regex for word boundary matching
+            matches = len(re.findall(rf"\b{f}\b", text))
+            count += matches
+            if matches > 0:
+                detected[f] = detected.get(f, 0) + matches
+    
+    filler_rate = (count / total_words * 100) if total_words > 0 else 0
+    
+    return {
+        "filler_count": count,
+        "filler_rate": round(filler_rate, 2),
+        "detected_fillers": detected,
+        "total_words": total_words
+    }
+
 
 def _ollama_generate(prompt: str) -> str:
     payload = {
@@ -45,7 +73,8 @@ Based on these answers, provide constructive feedback on the candidate's perform
   "overall_impression": "1-2 sentence overall impression.",
   "strengths": ["strength 1", "strength 2"],
   "areas_for_improvement": ["area 1", "area 2"],
-  "technical_accuracy": "A brief comment on technical accuracy if applicable."
+  "technical_accuracy": "A brief comment on technical accuracy.",
+  "vocal_confidence": "Comment on clarity, pacing, and use of filler words."
 }}"""
 
 def run(answers: List[dict]) -> dict:
@@ -69,6 +98,11 @@ def run(answers: List[dict]) -> dict:
             clean = clean[start:end]
 
         data = json.loads(clean)
+        
+        # Merge voice analysis
+        voice_stats = _analyze_filler_words(answers)
+        data["voice_analysis"] = voice_stats
+        
         return data
 
     except Exception as e:

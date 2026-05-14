@@ -1,21 +1,24 @@
 import re
 import chromadb
-from sentence_transformers import SentenceTransformer
 import uuid
 from pathlib import Path
 
-# INIT — PersistentClient (not in-memory) so SQLite state is shared across
-# threads. Streamlit reruns the script on a fresh ScriptRunner thread, and
-# chromadb's in-memory `Client()` uses per-thread SQLite connections, which
-# means the new thread sees a DB with no tables → OperationalError.
-_CHROMA_PATH = Path(__file__).parent / ".chroma"
-_CHROMA_PATH.mkdir(exist_ok=True)
-client = chromadb.PersistentClient(path=str(_CHROMA_PATH))
+from embedder import embed_texts, embed_single
+
+# Persistent Chroma DB storage for resume + JD embeddings
+PERSIST_DIR = Path(__file__).parent / ".chroma_db"
+PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+try:
+    client = chromadb.PersistentClient(path=str(PERSIST_DIR))
+except AttributeError:
+    client = chromadb.Client()
+except Exception as exc:
+    print(f"[vector_store] Warning: Persistent Chroma client failed, falling back to in-memory: {exc}")
+    client = chromadb.Client()
 
 collection = client.get_or_create_collection("resume")
 jd_collection = client.get_or_create_collection("jd_requirements")
-
-model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 # SAFE TEXT CONVERSION
@@ -62,23 +65,13 @@ def store_resume_chunks(chunks):
     if not documents:
         return
 
-    embeddings = model.encode(documents)
-    try:
-        collection.add(
-            documents=documents,
-            embeddings=embeddings.tolist(),
-            metadatas=metadatas,
-            ids=ids,
-        )
-    except chromadb.errors.NotFoundError:
-        # collection was removed from the DB — recreate and retry
-        collection = client.get_or_create_collection("resume")
-        collection.add(
-            documents=documents,
-            embeddings=embeddings.tolist(),
-            metadatas=metadatas,
-            ids=ids,
-        )
+    embeddings = embed_texts(documents)
+    collection.add(
+        documents=documents,
+        embeddings=embeddings,
+        metadatas=metadatas,
+        ids=ids,
+    )
     print(f"[vector_store] Stored {len(documents)} resume chunks with section metadata")
 
 
@@ -88,7 +81,7 @@ def query_resume_top_k(query, k=25, section_filter=None):
     if not query:
         return []
 
-    query_embedding = model.encode([str(query)])[0]
+    query_embedding = embed_single(str(query))
 
     where = None
     if section_filter:
@@ -1053,21 +1046,12 @@ def store_jd_requirements_tagged(jd_items=None, resume_items=None, title=None):
     if not processed:
         return
 
-    embeddings = model.encode(processed)
-    try:
-        jd_collection.add(
-            documents=processed,
-            embeddings=embeddings.tolist(),
-            ids=[str(uuid.uuid4()) for _ in processed],
-        )
-    except chromadb.errors.NotFoundError:
-        # recreate collection and retry (jd_collection declared global at function top)
-        jd_collection = client.get_or_create_collection("jd_requirements")
-        jd_collection.add(
-            documents=processed,
-            embeddings=embeddings.tolist(),
-            ids=[str(uuid.uuid4()) for _ in processed],
-        )
+    embeddings = embed_texts(processed)
+    jd_collection.add(
+        documents=processed,
+        embeddings=embeddings,
+        ids=[str(uuid.uuid4()) for _ in processed],
+    )
     print(f"[vector_store] Stored {len(processed)} JD requirements")
 
 
@@ -1101,7 +1085,7 @@ def query_jd(query, k=10):
     global jd_collection
     if not query:
         return []
-    query_embedding = model.encode([str(query)])[0]
+    query_embedding = embed_single(str(query))
     try:
         results = jd_collection.query(
             query_embeddings=[query_embedding],
@@ -1132,3 +1116,20 @@ def query_jd(query, k=10):
 
 def get_all_jd_requirements(jd_text=None):
     return get_jd_only_requirements(jd_text)
+
+
+def get_skills(collection_name="resume"):
+    """
+    Retrieve all unique documents (skills/requirements) from the specified collection.
+    """
+    global collection, jd_collection
+    target = collection if collection_name == "resume" else jd_collection
+    try:
+        data = target.get(include=["documents"])
+        docs = data.get("documents") or []
+        # Filter out None and deduplicate
+        unique_skills = list(dict.fromkeys([str(d).strip() for d in docs if d]))
+        return unique_skills
+    except Exception as e:
+        print(f"[vector_store] Error in get_skills({collection_name}): {e}")
+        return []
