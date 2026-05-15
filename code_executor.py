@@ -169,8 +169,45 @@ def build_sandbox_image():
         return False
 
 
+def run_local_cpp(code: str, test_cases: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Execute C++ code locally using g++ (Fallback when Docker is missing)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_path = Path(tmpdir) / "solution.cpp"
+        exe_path = Path(tmpdir) / "solution.exe" if sys.platform == "win32" else Path(tmpdir) / "solution"
+        
+        src_path.write_text(code)
+        
+        # Compile
+        compile_res = subprocess.run(
+            ["g++", str(src_path), "-o", str(exe_path)],
+            capture_output=True,
+            text=True
+        )
+        
+        if compile_res.returncode != 0:
+            return {"success": False, "error": f"Compilation Error: {compile_res.stderr}"}
+            
+        # Execute (Simple run for now, doesn't handle complex test cases as nicely as Python yet)
+        try:
+            run_res = subprocess.run(
+                [str(exe_path)],
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT_SECONDS
+            )
+            return {"success": True, "output": run_res.stdout, "test_results": []}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "Execution timed out"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+
 def execute_python(code: str, test_cases: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Execute Python code with test cases, falling back to local if Docker fails."""
+    # Safety check: If the code looks like C++ but we're in Python mode, block it early
+    if "using namespace std" in code or "#include <" in code:
+        return {"success": False, "error": "C++ code detected in Python runtime. Please switch to C++ mode."}
+
     docker_res = run_docker_container(code, "python", test_cases)
     
     if not docker_res.get("success") and docker_res.get("error") in ["DOCKER_NOT_RUNNING", "DOCKER_NOT_INSTALLED"]:
@@ -182,8 +219,13 @@ def execute_python(code: str, test_cases: List[Dict[str, Any]]) -> Dict[str, Any
 
 def execute_cpp(code: str, test_cases: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Execute C++ code with test cases."""
-    # C++ fallback is harder (requires compiler), so we just try Docker
-    return run_docker_container(code, "cpp", test_cases)
+    docker_res = run_docker_container(code, "cpp", test_cases)
+    
+    if not docker_res.get("success") and docker_res.get("error") in ["DOCKER_NOT_RUNNING", "DOCKER_NOT_INSTALLED"]:
+        print(f"[code_executor] Docker unavailable. Attempting local g++ execution...")
+        return run_local_cpp(code, test_cases)
+        
+    return docker_res
 
 
 def execute_code(code: str, language: str, test_cases: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -191,9 +233,10 @@ def execute_code(code: str, language: str, test_cases: Optional[List[Dict[str, A
     if test_cases is None:
         test_cases = [{"input": "", "expected": ""}]
     
-    if language.lower() in ["python", "py"]:
+    lang_lower = language.lower()
+    if lang_lower in ["python", "py"]:
         return execute_python(code, test_cases)
-    elif language.lower() in ["cpp", "c++"]:
+    elif lang_lower in ["cpp", "c++"]:
         return execute_cpp(code, test_cases)
     else:
         return {"success": False, "error": f"Unsupported language: {language}"}

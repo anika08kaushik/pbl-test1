@@ -54,6 +54,7 @@ class DSAQuestion(BaseModel):
     description: str
     constraints: List[str]
     base_code: str
+    language: str
     solution_logic: str # For AI comparison
 
 class AssessmentData(BaseModel):

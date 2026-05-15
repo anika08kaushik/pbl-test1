@@ -51,6 +51,7 @@ Strictly return ONLY valid JSON in this format:
     "description": "Problem statement for {target_lang}",
     "constraints": ["Time complexity requirement"],
     "base_code": "The initial {target_lang} function signature",
+    "language": "{target_lang.lower()}",
     "solution_logic": "Pseudocode explanation of the optimal approach"
   }}
 }}
@@ -96,6 +97,7 @@ def generate_assessment(ats_result: ATSResult) -> AssessmentData:
                 description="Write a function that reverses a string in-place without using extra memory.",
                 constraints=["O(1) extra space", "O(N) time complexity"],
                 base_code="def reverse_string(s: list[str]) -> None:",
+                language="python",
                 solution_logic="Use two-pointer technique swapping elements from start and end."
             )
         )
